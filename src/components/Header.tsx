@@ -73,9 +73,11 @@ export const Header: React.FC<HeaderProps> = ({
           
           {/* Brand & App Title */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 ring-1 ring-white/20 shrink-0">
-              <Zap className="w-4 h-4 fill-current" />
-            </div>
+            <img
+              src="/icon.png"
+              alt="Product Pulse Icon"
+              className="w-9 h-9 rounded-xl shadow-lg ring-1 ring-white/20 shrink-0 object-cover"
+            />
             <div className="hidden sm:block">
               <h1 className={`text-base font-bold tracking-tight leading-none ${titleColor}`}>
                 Product Pulse
