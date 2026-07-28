@@ -73,11 +73,32 @@ export const Header: React.FC<HeaderProps> = ({
           
           {/* Brand & App Title */}
           <div className="flex items-center gap-3">
-            <img
-              src="/icon.png"
-              alt="Product Pulse Icon"
-              className="w-9 h-9 rounded-xl shadow-lg ring-1 ring-white/20 shrink-0 object-cover"
-            />
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-950 via-slate-900 to-purple-950 p-1.5 shadow-lg ring-1 ring-indigo-500/40 shrink-0 flex items-center justify-center">
+              <svg viewBox="0 0 100 100" className="w-full h-full">
+                <defs>
+                  <linearGradient id="hdrPulseGrad" x1="0%" y1="50%" x2="100%" y2="50%">
+                    <stop offset="0%" stopColor="#e024e0" />
+                    <stop offset="50%" stopColor="#a855f7" />
+                    <stop offset="100%" stopColor="#06b6d4" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d="M 10 52 L 26 52 L 36 80 L 46 22 L 56 62 L 66 38 L 82 16"
+                  fill="none"
+                  stroke="url(#hdrPulseGrad)"
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M 64 16 L 86 14 L 84 36 Z"
+                  fill="#06b6d4"
+                  stroke="#06b6d4"
+                  strokeWidth="3"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
             <div className="hidden sm:block">
               <h1 className={`text-base font-bold tracking-tight leading-none ${titleColor}`}>
                 Product Pulse
