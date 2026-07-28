@@ -1,0 +1,6 @@
+{
+  "name": "Weekly Status Tracker",
+  "description": "Fast accomplishment logging with voice-to-text, hotkey shortcuts, AI weekly summaries, and historical archives.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

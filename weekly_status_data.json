@@ -1,0 +1,52 @@
+{
+  "projects": [
+    {
+      "id": "proj-1",
+      "name": "Atlas API Redesign",
+      "description": "GraphQL & REST core backend services overhaul",
+      "color": "indigo",
+      "icon": "Layers",
+      "status": "active",
+      "order": 1
+    },
+    {
+      "id": "proj-2",
+      "name": "Mobile App V2",
+      "description": "React Native iOS & Android unified client release",
+      "color": "emerald",
+      "icon": "Smartphone",
+      "status": "active",
+      "order": 2
+    },
+    {
+      "id": "proj-3",
+      "name": "Q3 Cloud Migration",
+      "description": "Zero-downtime database & microservices AWS to GCP port",
+      "color": "sky",
+      "icon": "Cloud",
+      "status": "active",
+      "order": 3
+    },
+    {
+      "id": "proj-4",
+      "name": "Customer Onboarding Flow",
+      "description": "Self-serve workspace invitation & activation journey",
+      "color": "amber",
+      "icon": "UserCheck",
+      "status": "active",
+      "order": 4
+    },
+    {
+      "id": "proj-5",
+      "name": "Internal DevX & CI/CD",
+      "description": "Build pipeline optimization and test runner speeding",
+      "color": "rose",
+      "icon": "Terminal",
+      "status": "active",
+      "order": 5
+    }
+  ],
+  "accomplishments": [],
+  "weekRecords": [],
+  "createdAt": "2026-07-28T00:30:34.627Z"
+}
