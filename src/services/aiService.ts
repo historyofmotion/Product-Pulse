@@ -88,44 +88,60 @@ Return a JSON object with:
 4. "slackFormatted": Markdown text formatted specifically for pasting into Slack / Teams (using *bold*, emojis, clean bullet points).
 5. "emailFormatted": Plain text formatted specifically for sending as an executive update email.`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.6-flash',
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          executiveSummary: { type: Type.STRING },
-          keyWins: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          projectSummaries: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                projectId: { type: Type.STRING },
-                projectName: { type: Type.STRING },
-                statusColor: { type: Type.STRING },
-                headline: { type: Type.STRING },
-                bulletPoints: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
+  const modelCandidates = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-3.6-flash'];
+  let response;
+  let lastError;
+
+  for (const modelName of modelCandidates) {
+    try {
+      response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              executiveSummary: { type: Type.STRING },
+              keyWins: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              projectSummaries: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    projectId: { type: Type.STRING },
+                    projectName: { type: Type.STRING },
+                    statusColor: { type: Type.STRING },
+                    headline: { type: Type.STRING },
+                    bulletPoints: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                    },
+                  },
+                  required: ['projectName', 'headline', 'bulletPoints'],
                 },
               },
-              required: ['projectName', 'headline', 'bulletPoints'],
+              slackFormatted: { type: Type.STRING },
+              emailFormatted: { type: Type.STRING },
             },
+            required: ['executiveSummary', 'keyWins', 'projectSummaries', 'slackFormatted', 'emailFormatted'],
           },
-          slackFormatted: { type: Type.STRING },
-          emailFormatted: { type: Type.STRING },
         },
-        required: ['executiveSummary', 'keyWins', 'projectSummaries', 'slackFormatted', 'emailFormatted'],
-      },
-    },
-  });
+      });
+      if (response && response.text) break;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`Browser Gemini ${modelName} call failed, trying next fallback...`, err?.message);
+    }
+  }
+
+  if (!response || !response.text) {
+    throw lastError || new Error('Failed to generate summary with Gemini API.');
+  }
 
   const parsed = JSON.parse(response.text || '{}');
   return {
@@ -152,22 +168,38 @@ Return JSON with:
 2. "suggestedTag": One of ["Feature", "Fix", "Milestone", "Meeting", "Docs", "Refactor", "Win", "Ops"].
 3. "suggestedImpact": One of ["High", "Medium", "Standard"].`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.6-flash',
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          polishedText: { type: Type.STRING },
-          suggestedTag: { type: Type.STRING },
-          suggestedImpact: { type: Type.STRING },
+  const modelCandidates = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-3.6-flash'];
+  let response;
+  let lastError;
+
+  for (const modelName of modelCandidates) {
+    try {
+      response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              polishedText: { type: Type.STRING },
+              suggestedTag: { type: Type.STRING },
+              suggestedImpact: { type: Type.STRING },
+            },
+            required: ['polishedText', 'suggestedTag', 'suggestedImpact'],
+          },
         },
-        required: ['polishedText', 'suggestedTag', 'suggestedImpact'],
-      },
-    },
-  });
+      });
+      if (response && response.text) break;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`Browser Gemini ${modelName} polish note call failed...`, err?.message);
+    }
+  }
+
+  if (!response || !response.text) {
+    throw lastError || new Error('Failed to polish note with Gemini API.');
+  }
 
   return JSON.parse(response.text || '{}');
 }

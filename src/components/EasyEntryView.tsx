@@ -13,19 +13,27 @@ import {
   X,
   AlertTriangle,
   ExternalLink,
+  Mic,
+  MicOff,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { Project, Accomplishment, TagType, ImpactLevel } from '../types';
 import { formatSmartDate } from '../utils/dateUtils';
+import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
+import { polishNote } from '../services/aiService';
 
 interface EasyEntryViewProps {
   projects: Project[];
   accomplishments: Accomplishment[];
   theme: 'dark' | 'light' | 'paper';
   onSaveAccomplishment: (data: {
+    id?: string;
     projectId: string;
     content: string;
     tag: TagType;
     impact: ImpactLevel;
+    originalSpeechRaw?: string;
   }) => void;
   onUpdateAccomplishment: (id: string, newContent: string) => void;
   onDeleteAccomplishment: (id: string) => void;
@@ -50,12 +58,14 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
     activeProjects[0]?.id || ''
   );
 
-  // Note content
+  // Note content inside main entry panel
   const [noteContent, setNoteContent] = useState('');
 
-  // Editing state for existing note
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [editingContent, setEditingContent] = useState('');
+  // Editing state (ID of item being edited in main entry panel)
+  const [editingAccomplishmentId, setEditingAccomplishmentId] = useState<string | null>(null);
+
+  // Newly added or updated item highlight state for lower list (fades back to normal after 2.5s)
+  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
 
   // Unsaved draft warning modal state
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
@@ -64,8 +74,65 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
 
-  // Post success feedback
-  const [lastSavedNotice, setLastSavedNotice] = useState<string | null>(null);
+  // Voice-to-text & AI polish state
+  const [rawSpeechSaved, setRawSpeechSaved] = useState<string | undefined>(undefined);
+  const [isPolishing, setIsPolishing] = useState(false);
+  const [polishNotice, setPolishNotice] = useState<string | null>(null);
+
+  const {
+    isListening,
+    transcript,
+    interimTranscript,
+    error: speechError,
+    hasSupport: speechSupported,
+    startListening,
+    stopListening,
+    resetTranscript,
+  } = useSpeechRecognition({
+    onResult: (latestText) => {
+      setNoteContent(latestText);
+      setRawSpeechSaved(latestText);
+    },
+  });
+
+  const handleToggleVoice = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      resetTranscript();
+      startListening();
+    }
+  };
+
+  const handlePolishWithAI = async () => {
+    if (!noteContent.trim()) return;
+    setIsPolishing(true);
+    setPolishNotice(null);
+
+    const project = activeProjects.find((p) => p.id === selectedProjectId);
+
+    try {
+      const result = await polishNote({
+        rawText: noteContent,
+        projectName: project?.name,
+      });
+
+      if (result && result.polishedText) {
+        if (!rawSpeechSaved) {
+          setRawSpeechSaved(noteContent);
+        }
+        setNoteContent(result.polishedText);
+        setPolishNotice('Polished raw note into executive statement!');
+        setTimeout(() => setPolishNotice(null), 3500);
+      }
+    } catch (err: any) {
+      console.error('Polish error:', err);
+      setPolishNotice(err.message || 'AI service unavailable.');
+      setTimeout(() => setPolishNotice(null), 3500);
+    } finally {
+      setIsPolishing(false);
+    }
+  };
 
   // Auto-select first project if selection becomes invalid
   useEffect(() => {
@@ -77,14 +144,14 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
   // Warn on browser tab close/reload if unsaved draft exists
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (noteContent.trim()) {
+      if (noteContent.trim() && !editingAccomplishmentId) {
         e.preventDefault();
         e.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [noteContent]);
+  }, [noteContent, editingAccomplishmentId]);
 
   const selectedProjectObj = activeProjects.find((p) => p.id === selectedProjectId);
 
@@ -143,24 +210,79 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
     setIsAddingProject(false);
   };
 
-  // Handle Note Submission
+  // Load existing note into Main Panel for editing
+  const handleSelectNoteForEditing = (item: Accomplishment) => {
+    setEditingAccomplishmentId(item.id);
+    setNoteContent(item.content);
+    setSelectedProjectId(item.projectId);
+    setRawSpeechSaved(item.originalSpeechRaw);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Cancel editing in Main Panel
+  const handleCancelEditing = () => {
+    setEditingAccomplishmentId(null);
+    setNoteContent('');
+    setRawSpeechSaved(undefined);
+    resetTranscript();
+  };
+
+  // Delete note directly from Main Panel
+  const handleDeleteEditingNote = () => {
+    if (!editingAccomplishmentId) return;
+    onDeleteAccomplishment(editingAccomplishmentId);
+    setEditingAccomplishmentId(null);
+    setNoteContent('');
+    setRawSpeechSaved(undefined);
+    resetTranscript();
+  };
+
+  // Handle Main Panel Submission (Create or Update)
   const handleSubmitNote = (e?: React.FormEvent | React.KeyboardEvent) => {
     if (e) e.preventDefault();
-    if (!noteContent.trim() || !selectedProjectId) return;
 
-    const targetProjName = activeProjects.find((p) => p.id === selectedProjectId)?.name || 'Project';
+    // Stop voice recording first if active and combine any pending interim transcript
+    let currentText = noteContent;
+    if (isListening) {
+      stopListening();
+      if (interimTranscript.trim()) {
+        currentText = currentText
+          ? `${currentText} ${interimTranscript.trim()}`
+          : interimTranscript.trim();
+        setNoteContent(currentText);
+      }
+    }
 
-    onSaveAccomplishment({
-      projectId: selectedProjectId,
-      content: noteContent.trim(),
-      tag: 'Feature',
-      impact: 'Standard',
-    });
+    const trimmedContent = currentText.trim();
+    if (!trimmedContent || !selectedProjectId) return;
+
+    if (editingAccomplishmentId) {
+      // Updating existing accomplishment in main panel
+      onUpdateAccomplishment(editingAccomplishmentId, trimmedContent);
+      setHighlightedItemId(editingAccomplishmentId);
+      setEditingAccomplishmentId(null);
+    } else {
+      // Creating new accomplishment
+      const targetId = `acc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+      onSaveAccomplishment({
+        id: targetId,
+        projectId: selectedProjectId,
+        content: trimmedContent,
+        tag: 'Feature',
+        impact: 'Standard',
+        originalSpeechRaw: rawSpeechSaved || currentText,
+      });
+      setHighlightedItemId(targetId);
+    }
 
     setNoteContent('');
+    setRawSpeechSaved(undefined);
+    resetTranscript();
 
-    setLastSavedNotice(`Update saved to ${targetProjName}!`);
-    setTimeout(() => setLastSavedNotice(null), 3000);
+    // Fade highlight back to normal after 2.5s
+    setTimeout(() => {
+      setHighlightedItemId(null);
+    }, 2500);
   };
 
   // Textarea keyboard shortcut handler: Cmd+Enter or Ctrl+Enter
@@ -173,7 +295,7 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
 
   // Handle "Go to Summary" click with draft check
   const handleGoToSummaryClick = () => {
-    if (noteContent.trim()) {
+    if (noteContent.trim() && !editingAccomplishmentId) {
       setShowUnsavedModal(true);
     } else {
       onSwitchToSummary();
@@ -190,23 +312,9 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
   // Discard draft & switch to summary
   const handleDiscardAndSwitch = () => {
     setNoteContent('');
+    setEditingAccomplishmentId(null);
     setShowUnsavedModal(false);
     onSwitchToSummary();
-  };
-
-  // Start editing existing note
-  const handleStartEdit = (note: Accomplishment) => {
-    setEditingNoteId(note.id);
-    setEditingContent(note.content);
-  };
-
-  // Save inline edit
-  const handleSaveEdit = (id: string) => {
-    if (editingContent.trim()) {
-      onUpdateAccomplishment(id, editingContent.trim());
-    }
-    setEditingNoteId(null);
-    setEditingContent('');
   };
 
   // Format URLs into clickable links
@@ -222,7 +330,7 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
             href={part}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-indigo-500 hover:text-indigo-400 underline underline-offset-2 break-all font-semibold transition-colors"
+            className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 underline underline-offset-2 break-all font-semibold transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             <ExternalLink className="w-3.5 h-3.5 shrink-0 inline" />
@@ -237,22 +345,29 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-12">
       
-      {/* ----------------- EASY ENTRY COMPOSER ----------------- */}
-      <div className={`${cardBg} border rounded-3xl p-6 shadow-xl space-y-5`}>
+      {/* ----------------- MAIN NOTE ENTRY & EDIT PANEL ----------------- */}
+      <div className={`${cardBg} border rounded-3xl p-6 shadow-xl space-y-5 transition-all`}>
         
         {/* Header Title */}
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base font-bold flex items-center gap-2">
-              <Zap className="w-4 h-4 text-indigo-500" />
-              <span>Easy Entry Note Log</span>
+              <Zap className={`w-4 h-4 ${editingAccomplishmentId ? 'text-amber-400 animate-pulse' : 'text-indigo-500'}`} />
+              <span>{editingAccomplishmentId ? 'Edit Update Note' : 'Easy Entry Note Log'}</span>
+              {editingAccomplishmentId && (
+                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  Editing Mode
+                </span>
+              )}
             </h2>
             <p className={`text-xs ${subTextColor} mt-0.5`}>
-              Click a project, type your update or paste links, and press <kbd className="px-1.5 py-0.5 bg-slate-800 text-indigo-300 rounded font-mono text-[11px] border border-slate-700">⌘+Enter</kbd> to save.
+              {editingAccomplishmentId
+                ? 'Update your note content below and press Save Changes or Delete Note.'
+                : 'Click a project, type your update or paste links, and press ⌘+Enter to save.'}
             </p>
           </div>
 
-          {noteContent.trim().length > 0 && (
+          {noteContent.trim().length > 0 && !editingAccomplishmentId && (
             <span className="px-2.5 py-1 bg-amber-500/15 border border-amber-500/30 text-amber-500 rounded-lg text-[11px] font-bold flex items-center gap-1 animate-pulse">
               <AlertTriangle className="w-3.5 h-3.5" />
               <span>Unsaved Draft</span>
@@ -357,80 +472,198 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
           </div>
         </div>
 
-        {/* 2. TEXT NOTE ENTRY WITH CMD+ENTER SHORTCUT & DIRECT PASTE */}
+        {/* 2. TEXT NOTE ENTRY WITH VOICE TO TEXT & CMD+ENTER SHORTCUT */}
         <form onSubmit={handleSubmitNote} className="space-y-3">
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className={`text-xs font-bold ${subTextColor} uppercase tracking-wider`}>
-                2. Enter Update Content
+          <div className="space-y-2">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <label className={`text-xs font-bold ${subTextColor} uppercase tracking-wider flex items-center gap-2`}>
+                <span>2. {editingAccomplishmentId ? 'Edit Update Content' : 'Enter Update Content'}</span>
+                {isListening && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+                    <span>Recording Voice...</span>
+                  </span>
+                )}
               </label>
-              <span className={`text-[11px] ${subTextColor} flex items-center gap-1`}>
-                <Command className="w-3 h-3 text-indigo-400" />
-                <span>Press <strong>⌘+Enter</strong> or <strong>Ctrl+Enter</strong> to save</span>
-              </span>
+
+              <div className="flex items-center gap-2">
+                {/* Voice to Text Microphone Button */}
+                <button
+                  type="button"
+                  onClick={handleToggleVoice}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    isListening
+                      ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/40 ring-2 ring-rose-400 animate-bounce'
+                      : 'bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-500 dark:text-indigo-400 border border-indigo-500/30'
+                  }`}
+                  title={isListening ? 'Click to stop voice recording' : 'Click to dictate note using microphone'}
+                >
+                  {isListening ? (
+                    <>
+                      <MicOff className="w-3.5 h-3.5 text-white" />
+                      <span>Stop Listening</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>Voice to Text</span>
+                    </>
+                  )}
+                </button>
+
+                {/* AI Polish Button */}
+                {noteContent.trim() && (
+                  <button
+                    type="button"
+                    onClick={handlePolishWithAI}
+                    disabled={isPolishing}
+                    className="px-3 py-1.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                    title="Refine spoken or raw note into executive statement with AI"
+                  >
+                    {isPolishing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    )}
+                    <span>AI Polish</span>
+                  </button>
+                )}
+
+                <span className={`text-[11px] ${subTextColor} hidden sm:flex items-center gap-1`}>
+                  <Command className="w-3 h-3 text-indigo-400" />
+                  <span><strong>⌘+Enter</strong> to save</span>
+                </span>
+              </div>
             </div>
+
+            {/* Active Voice Recording Live Indicator Bar */}
+            {isListening && (
+              <div className="p-3 bg-rose-950/50 border border-rose-500/40 rounded-xl space-y-1.5 animate-fade-in shadow-inner">
+                <div className="flex items-center justify-between text-xs text-rose-200 font-semibold">
+                  <span className="flex items-center gap-2">
+                    <Mic className="w-4 h-4 text-rose-400 animate-pulse" />
+                    <span>Microphone active — dictating live into update box...</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-1.5 h-3 bg-rose-400 animate-pulse rounded-full"></span>
+                    <span className="w-1.5 h-5 bg-rose-400 animate-pulse rounded-full delay-75"></span>
+                    <span className="w-1.5 h-2 bg-rose-400 animate-pulse rounded-full delay-150"></span>
+                  </span>
+                </div>
+                {interimTranscript && (
+                  <p className="text-xs text-rose-200/90 italic bg-rose-900/40 p-2 rounded-lg font-mono">
+                    "{interimTranscript}..."
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Speech Permission / Error Notice */}
+            {speechError && (
+              <div className="p-3 bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-300 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
+                  <span>{speechError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleToggleVoice}
+                  className="underline hover:text-amber-400 cursor-pointer font-bold shrink-0 text-xs"
+                >
+                  Try Again
+                </button>
+              </div>
+            )}
+
+            {/* AI Polish Notice */}
+            {polishNotice && (
+              <div className="p-2.5 bg-purple-500/15 border border-purple-500/30 text-purple-600 dark:text-purple-300 rounded-xl text-xs font-semibold flex items-center gap-2 animate-fade-in">
+                <Sparkles className="w-4 h-4 text-purple-400 shrink-0" />
+                <span>{polishNotice}</span>
+              </div>
+            )}
 
             {/* Note Text Area */}
             <textarea
               value={noteContent}
               onChange={(e) => setNoteContent(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="What did you accomplish or work on? Paste links directly (e.g. https://github.com/org/repo/pull/42)"
+              placeholder="What did you accomplish or work on? Click 'Voice to Text' to dictate with mic, or paste links directly (e.g. https://github.com/org/repo/pull/42)"
               rows={3}
-              className={`w-full ${inputBg} text-sm rounded-2xl p-4 focus:outline-none transition-all leading-relaxed`}
+              className={`w-full ${inputBg} text-sm rounded-2xl p-4 focus:outline-none transition-all leading-relaxed ${
+                editingAccomplishmentId ? 'ring-2 ring-amber-500/50 border-amber-500' : ''
+              }`}
             />
           </div>
 
-          {/* Submit Row */}
-          <div className="flex items-center justify-between pt-2">
-            <div className="text-xs">
-              Posting to: <strong className="text-indigo-500 font-bold">{activeProjects.find(p => p.id === selectedProjectId)?.name || 'None'}</strong>
-            </div>
+          {/* Submit / Edit Action Row */}
+          <div className="flex items-center justify-end gap-2.5 pt-2">
+            {editingAccomplishmentId ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleDeleteEditingNote}
+                  className="px-3.5 py-2.5 bg-rose-600/15 hover:bg-rose-600/25 text-rose-400 border border-rose-500/30 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Delete this update permanently"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
+                </button>
 
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={handleGoToSummaryClick}
-                className="px-3.5 py-2.5 bg-purple-600/10 hover:bg-purple-600/20 text-purple-600 dark:text-purple-300 border border-purple-500/30 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Go to Summary &rarr;</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={handleCancelEditing}
+                  className={`px-3.5 py-2.5 ${btnInactiveProj} border font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer`}
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Cancel</span>
+                </button>
 
+                <button
+                  type="submit"
+                  disabled={!noteContent.trim()}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-600/30 flex items-center gap-2 cursor-pointer transition-all hover:scale-[1.02]"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save</span>
+                  <span className="text-[10px] opacity-75 font-mono ml-0.5">(⌘↵)</span>
+                </button>
+              </>
+            ) : (
               <button
                 type="submit"
-                disabled={!noteContent.trim() || !selectedProjectId}
+                disabled={(!noteContent.trim() && !interimTranscript.trim()) || !selectedProjectId}
                 className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-600/30 flex items-center gap-2 cursor-pointer transition-all hover:scale-[1.02]"
               >
                 <Send className="w-4 h-4" />
-                <span>Save Update</span>
+                <span>Save</span>
                 <span className="text-[10px] opacity-75 font-mono ml-0.5">(⌘↵)</span>
               </button>
-            </div>
+            )}
           </div>
         </form>
 
-        {/* Last Saved Confirmation Toast */}
-        {lastSavedNotice && (
-          <div className="p-3 bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-300 rounded-xl text-xs font-bold flex items-center gap-2 animate-fade-in">
-            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-            <span>{lastSavedNotice}</span>
-          </div>
-        )}
-
       </div>
 
-      {/* ----------------- LOGGED UPDATES LIST WITH INLINE EDIT & DELETE ----------------- */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-extrabold uppercase tracking-wider flex items-center gap-2">
-            <span>Updates for {selectedProjectObj?.name || 'Project'}</span>
-            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-              {projectAccomplishments.length}
+      {/* ----------------- SINGLE-LINE UPDATES LISTING WITH PROJECT BUBBLE TITLE ----------------- */}
+      <div className="space-y-3">
+        {/* Title Header with Project Bubble & Count */}
+        <div className="flex items-center justify-between flex-wrap gap-2 px-1">
+          <div className="flex items-center gap-2.5">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-300">
+              UPDATES FOR
+            </h3>
+            <span className="px-3 py-1 rounded-xl text-xs font-extrabold bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+              <span>{selectedProjectObj?.name || 'Project'}</span>
             </span>
-          </h3>
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-300 border border-slate-700">
+              {projectAccomplishments.length} {projectAccomplishments.length === 1 ? 'update' : 'updates'}
+            </span>
+          </div>
+
           <span className={`text-xs ${subTextColor}`}>
-            Edit or delete updates for {selectedProjectObj?.name || 'this project'}
+            Click any update line to edit or delete in main panel above
           </span>
         </div>
 
@@ -440,80 +673,67 @@ export const EasyEntryView: React.FC<EasyEntryViewProps> = ({
             <p className={`text-xs ${subTextColor}`}>Type your update above and press ⌘+Enter to save!</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {projectAccomplishments.map((item) => {
-              const proj = projects.find((p) => p.id === item.projectId);
-              const isEditing = editingNoteId === item.id;
+              const isHighlighted = item.id === highlightedItemId;
+              const isEditingThis = item.id === editingAccomplishmentId;
 
               return (
                 <div
                   key={item.id}
-                  className={`${cardBg} border rounded-2xl p-4 transition-all space-y-2 group`}
+                  onClick={() => handleSelectNoteForEditing(item)}
+                  className={`px-4 py-3 border rounded-2xl transition-all duration-300 flex items-center justify-between gap-3 cursor-pointer group ${
+                    isHighlighted
+                      ? 'bg-indigo-600/25 border-indigo-400 ring-2 ring-indigo-400 shadow-lg shadow-indigo-500/30 animate-pulse'
+                      : isEditingThis
+                      ? 'bg-amber-500/15 border-amber-500/40 ring-1 ring-amber-500/50'
+                      : `${cardBg} hover:border-slate-700 hover:bg-slate-850`
+                  }`}
+                  title="Click to edit or delete this note in the main entry panel above"
                 >
-                  {/* Item Header */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-                        {proj?.name || 'Project'}
-                      </span>
-                      <span className={`text-[11px] ${subTextColor} flex items-center gap-1 font-medium`}>
-                        <Clock className="w-3 h-3 text-indigo-400" />
-                        {formatSmartDate(item.createdAt)}
-                      </span>
-                    </div>
+                  {/* Left / Center: Timestamp + Content Text (Single Line) */}
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <span className={`text-[11px] ${subTextColor} font-medium shrink-0 flex items-center gap-1 font-mono`}>
+                      <Clock className="w-3 h-3 text-indigo-400" />
+                      {formatSmartDate(item.createdAt)}
+                    </span>
 
-                    <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
-                      {!isEditing && (
-                        <button
-                          onClick={() => handleStartEdit(item)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-indigo-500/10 cursor-pointer"
-                          title="Edit Update"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => onDeleteAccomplishment(item.id)}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
-                        title="Delete Update"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
+                    <span className="text-xs text-slate-600 font-bold shrink-0">
+                      •
+                    </span>
 
-                  {/* Inline Editor or Display Text */}
-                  {isEditing ? (
-                    <div className="space-y-2 pt-1 animate-fade-in">
-                      <textarea
-                        value={editingContent}
-                        onChange={(e) => setEditingContent(e.target.value)}
-                        className={`w-full ${inputBg} text-xs rounded-xl p-3 focus:outline-none`}
-                        rows={2}
-                        autoFocus
-                      />
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => setEditingNoteId(null)}
-                          className={`px-3 py-1 rounded-lg text-xs font-semibold ${subTextColor} cursor-pointer flex items-center gap-1`}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                          <span>Cancel</span>
-                        </button>
-                        <button
-                          onClick={() => handleSaveEdit(item.id)}
-                          className="px-3.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Save Changes</span>
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-xs font-medium leading-relaxed whitespace-pre-wrap pl-0.5">
+                    <p className="text-xs font-medium truncate flex-1 leading-normal">
                       {renderTextWithLinks(item.content)}
                     </p>
-                  )}
+                  </div>
+
+                  {/* Right: Tag Badge (excluding default Feature) + Mic Badge + Edit Action Trigger */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {item.tag && item.tag !== 'Feature' && (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+                        {item.tag}
+                      </span>
+                    )}
+
+                    {item.originalSpeechRaw && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 flex items-center gap-1" title="Recorded via Voice dictation">
+                        <Mic className="w-2.5 h-2.5 text-indigo-400" />
+                        <span className="hidden sm:inline">Voice</span>
+                      </span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectNoteForEditing(item);
+                      }}
+                      className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center gap-1 transition-colors"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                      <span>Edit</span>
+                    </button>
+                  </div>
                 </div>
               );
             })}

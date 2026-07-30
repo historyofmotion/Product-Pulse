@@ -277,6 +277,7 @@ export default function App() {
   // Save accomplishment
   const handleSaveAccomplishment = useCallback(
     (data: {
+      id?: string;
       projectId: string;
       content: string;
       tag: TagType;
@@ -284,7 +285,7 @@ export default function App() {
       originalSpeechRaw?: string;
     }) => {
       const newAcc: Accomplishment = {
-        id: `acc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        id: data.id || `acc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
         projectId: data.projectId,
         content: data.content,
         tag: data.tag,
@@ -295,7 +296,6 @@ export default function App() {
       };
 
       setAccomplishments((prev) => [newAcc, ...prev]);
-      showToast('Accomplishment logged!');
     },
     [currentISOWeek]
   );

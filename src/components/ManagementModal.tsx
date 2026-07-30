@@ -77,6 +77,7 @@ export const ManagementModal: React.FC<ManagementModalProps> = ({
   const [newFileName, setNewFileName] = useState('');
   const [newFileLocation, setNewFileLocation] = useState(settings.storageLocation || '/Users/david/Documents/ProductPulse/');
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [preserveDataOnNewFile, setPreserveDataOnNewFile] = useState(true);
 
   if (!isOpen) return null;
 
@@ -146,34 +147,35 @@ export const ManagementModal: React.FC<ManagementModalProps> = ({
       activeStorageFileName: formattedName,
       storageLocation: formattedLocation,
     });
-    onResetData();
+    if (!preserveDataOnNewFile) {
+      onResetData();
+    }
     setNewFileName('');
     setImportStatus(`Created storage profile "${formattedName}" at location "${formattedLocation}"`);
     setTimeout(() => setImportStatus(null), 4000);
   };
 
-  // Handle Native OS File Picker ("Save As...")
+  // Handle Native OS File Picker ("Save As New Storage File...")
   const handleNativeSaveFilePicker = async () => {
-    const defaultName = newFileName.trim()
-      ? (newFileName.trim().endsWith('.json') ? newFileName.trim() : `${newFileName.trim()}.json`)
-      : 'weekly_status_data.json';
-
     if ('showSaveFilePicker' in window) {
       try {
         const handle = await (window as any).showSaveFilePicker({
-          suggestedName: defaultName,
+          suggestedName: 'product_pulse_storage.json',
           types: [
             {
-              description: 'JSON Data File',
+              description: 'JSON Storage Database File',
               accept: { 'application/json': ['.json'] },
             },
           ],
         });
 
+        const targetAccomplishments = preserveDataOnNewFile ? accomplishments : [];
+        const targetWeekRecords = preserveDataOnNewFile ? weekRecords : [];
+
         const initialData = {
           projects,
-          accomplishments: [],
-          weekRecords: [],
+          accomplishments: targetAccomplishments,
+          weekRecords: targetWeekRecords,
           createdAt: new Date().toISOString(),
         };
 
@@ -181,17 +183,19 @@ export const ManagementModal: React.FC<ManagementModalProps> = ({
         await writable.write(JSON.stringify(initialData, null, 2));
         await writable.close();
 
-        const pickedName = handle.name || defaultName;
-        const pickedLocation = newFileLocation.trim() || 'Selected System Directory';
+        const pickedName = handle.name || 'product_pulse_storage.json';
 
         onUpdateSettings({
           ...settings,
           activeStorageFileName: pickedName,
-          storageLocation: pickedLocation,
+          storageLocation: 'Selected System Directory',
         });
-        onResetData();
-        setNewFileName('');
-        setImportStatus(`Created and saved storage file "${pickedName}" at chosen location!`);
+        if (!preserveDataOnNewFile) {
+          onResetData();
+          setImportStatus(`Created fresh empty storage file "${pickedName}"!`);
+        } else {
+          setImportStatus(`Saved current workspace data into new storage file "${pickedName}"!`);
+        }
         setTimeout(() => setImportStatus(null), 4000);
       } catch (err: any) {
         if (err.name !== 'AbortError') {
@@ -199,7 +203,67 @@ export const ManagementModal: React.FC<ManagementModalProps> = ({
         }
       }
     } else {
-      handleCreateNewStorageFile();
+      const filename = prompt('Enter filename for your new workspace database:', 'weekly_status_data.json');
+      if (filename && filename.trim()) {
+        const formattedName = filename.trim().endsWith('.json') ? filename.trim() : `${filename.trim()}.json`;
+        onUpdateSettings({
+          ...settings,
+          activeStorageFileName: formattedName,
+          storageLocation: 'Local Storage',
+        });
+        if (!preserveDataOnNewFile) {
+          onResetData();
+          setImportStatus(`Created fresh empty storage profile "${formattedName}"!`);
+        } else {
+          setImportStatus(`Saved current workspace data to new storage profile "${formattedName}"!`);
+        }
+        setTimeout(() => setImportStatus(null), 4000);
+      }
+    }
+  };
+
+  // Handle Native OS Open File Picker ("Open Existing Database...")
+  const handleNativeOpenFilePicker = async () => {
+    if ('showOpenFilePicker' in window) {
+      try {
+        const [handle] = await (window as any).showOpenFilePicker({
+          types: [
+            {
+              description: 'JSON Storage Database File',
+              accept: { 'application/json': ['.json'] },
+            },
+          ],
+          multiple: false,
+        });
+
+        const file = await handle.getFile();
+        const text = await file.text();
+        const json = JSON.parse(text);
+
+        if (json.projects && json.accomplishments) {
+          onImportData({
+            projects: json.projects,
+            accomplishments: json.accomplishments,
+            weekRecords: json.weekRecords || [],
+          });
+          onUpdateSettings({
+            ...settings,
+            activeStorageFileName: file.name,
+            storageLocation: 'Selected System Directory',
+          });
+          setImportStatus(`Successfully opened and loaded workspace database "${file.name}"!`);
+          setTimeout(() => setImportStatus(null), 4000);
+        } else {
+          setImportStatus('Invalid JSON database file structure.');
+          setTimeout(() => setImportStatus(null), 4000);
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('File open picker error:', err);
+        }
+      }
+    } else {
+      fileInputRef.current?.click();
     }
   };
 
@@ -393,78 +457,52 @@ export const ManagementModal: React.FC<ManagementModalProps> = ({
                   </ul>
                 </div>
 
-                {/* Create / Switch to New Storage File with Location */}
+                {/* Storage File Dialog Actions (Save As / Open) */}
                 <div className="p-5 bg-slate-950 border border-slate-800 rounded-2xl space-y-4">
                   <div>
-                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                      Create New Storage File & Location
+                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                      <FolderPlus className="w-4 h-4 text-indigo-400" />
+                      <span>Select or Create Workspace Database File</span>
                     </h4>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Specify both the target directory location and the filename for your new workspace storage profile.
+                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                      Use OS system dialogs to pick an existing database file to open, or specify a location and filename to save a new one.
                     </p>
                   </div>
 
-                  <div className="space-y-3">
-                    {/* Storage Location Input */}
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
-                        Storage Location / Directory Path
-                      </label>
+                  {/* Option toggle for preserving current data when creating a new file */}
+                  <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl">
+                    <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-200 cursor-pointer select-none">
                       <input
-                        type="text"
-                        value={newFileLocation}
-                        onChange={(e) => setNewFileLocation(e.target.value)}
-                        placeholder="e.g., /Users/david/Documents/ProductPulse/"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                        type="checkbox"
+                        checked={preserveDataOnNewFile}
+                        onChange={(e) => setPreserveDataOnNewFile(e.target.checked)}
+                        className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-700 focus:ring-indigo-500 cursor-pointer"
                       />
-                    </div>
-
-                    {/* Storage Filename Input */}
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
-                        Storage Filename
-                      </label>
-                      <input
-                        type="text"
-                        value={newFileName}
-                        onChange={(e) => setNewFileName(e.target.value)}
-                        placeholder="e.g., Q3_weekly_logs.json"
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-                      />
-                    </div>
-
-                    {/* Path Preview */}
-                    <div className="p-2.5 bg-slate-900/80 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-400 flex items-center gap-1.5 overflow-x-auto">
-                      <Folder className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                      <span className="shrink-0 text-slate-500">Full Target Path:</span>
-                      <span className="text-indigo-200 font-semibold truncate">
-                        {newFileLocation.replace(/\/$/, '')}/{newFileName.trim() ? (newFileName.trim().endsWith('.json') ? newFileName.trim() : `${newFileName.trim()}.json`) : 'new_storage.json'}
+                      <span>Include current workspace data & notes in new file</span>
+                      <span className="text-[11px] text-slate-400 font-normal ml-auto">
+                        ({preserveDataOnNewFile ? 'Copies current data over' : 'Starts clean fresh file'})
                       </span>
-                    </div>
+                    </label>
+                  </div>
 
-                    {/* Action Buttons */}
-                    <div className="flex items-center gap-3 pt-1">
-                      {'showSaveFilePicker' in window && (
-                        <button
-                          type="button"
-                          onClick={handleNativeSaveFilePicker}
-                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer border border-slate-700 transition-colors"
-                        >
-                          <FolderPlus className="w-4 h-4 text-purple-400" />
-                          <span>Browse Location & Save...</span>
-                        </button>
-                      )}
+                  <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleNativeSaveFilePicker}
+                      className="w-full sm:w-auto flex-1 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 cursor-pointer transition-all hover:scale-[1.01]"
+                    >
+                      <FolderPlus className="w-4 h-4 text-white" />
+                      <span>Save As New File...</span>
+                    </button>
 
-                      <button
-                        type="button"
-                        onClick={handleCreateNewStorageFile}
-                        disabled={!newFileName.trim()}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer ml-auto shadow-md"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>Create Storage Profile</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={handleNativeOpenFilePicker}
+                      className="w-full sm:w-auto flex-1 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all hover:scale-[1.01]"
+                    >
+                      <Folder className="w-4 h-4 text-purple-400" />
+                      <span>Open Existing File...</span>
+                    </button>
                   </div>
                 </div>
 

@@ -92,11 +92,12 @@ export function useSpeechRecognition(options: SpeechRecognitionHookOptions = {})
 
   const startListening = useCallback(() => {
     if (!hasSupport) {
-      setError('Speech recognition is not supported in this browser.');
+      setError('Speech recognition is not supported in this browser. You can type notes manually.');
       return;
     }
     setError(null);
     setInterimTranscript('');
+
     try {
       if (recognitionRef.current) {
         recognitionRef.current.start();
