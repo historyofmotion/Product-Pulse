@@ -63,4 +63,10 @@ export interface AppSettings {
   activeStorageFileName?: string;
   storageLocation?: string;
   geminiApiKey?: string;
+  
+  // Multi-provider AI settings
+  aiProvider?: 'gemini' | 'openai' | 'openrouter' | 'custom';
+  aiApiKey?: string;
+  customModelName?: string;
+  customBaseUrl?: string;
 }

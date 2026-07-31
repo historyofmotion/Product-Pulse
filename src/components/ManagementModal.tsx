@@ -736,32 +736,126 @@ export const ManagementModal: React.FC<ManagementModalProps> = ({
                   </div>
                 </div>
 
-                {/* Gemini API Key (Standalone / Serverless Mode) */}
-                <div className="p-5 bg-slate-950 border border-slate-800 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                      Gemini API Key (Serverless Standalone Mode)
-                    </h4>
-                    <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                      Optional if server running
-                    </span>
+                {/* AI Engine & API Configuration */}
+                <div className="p-5 bg-slate-950 border border-slate-800 rounded-2xl space-y-4">
+                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                    AI Engine & API Configuration
+                  </h4>
+                  
+                  {/* Provider Dropdown */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
+                      Select AI Provider
+                    </label>
+                    <select
+                      value={settings.aiProvider || 'gemini'}
+                      onChange={(e) => {
+                        onUpdateSettings({
+                          ...settings,
+                          aiProvider: e.target.value as any,
+                        });
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                    >
+                      <option value="gemini">Google Gemini (Client-side / Fallback)</option>
+                      <option value="openai">OpenAI (GPT-4o, GPT-4o-mini)</option>
+                      <option value="openrouter">OpenRouter (Claude, Llama, Gemini via API)</option>
+                      <option value="custom">Custom Endpoint (Ollama, Local AI, Proxies)</option>
+                    </select>
                   </div>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    When running Product Pulse directly as a static page without an Express server, enter your Gemini API Key here to enable AI Weekly Summaries and AI Note Polishing directly in your browser.
-                  </p>
-                  <input
-                    type="password"
-                    value={settings.geminiApiKey || ''}
-                    onChange={(e) =>
-                      onUpdateSettings({
-                        ...settings,
-                        geminiApiKey: e.target.value,
-                      })
-                    }
-                    placeholder="AIzaSy..."
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-                  />
+
+                  {/* Provider Specific API Key */}
+                  {(settings.aiProvider || 'gemini') === 'gemini' ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] font-semibold text-slate-300 block">
+                          Gemini API Key
+                        </label>
+                        <span className="text-[9px] text-slate-500">Optional if Express server is running</span>
+                      </div>
+                      <input
+                        type="password"
+                        value={settings.geminiApiKey || ''}
+                        onChange={(e) =>
+                          onUpdateSettings({
+                            ...settings,
+                            geminiApiKey: e.target.value,
+                          })
+                        }
+                        placeholder="AIzaSy..."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
+                        {(settings.aiProvider === 'openai' && 'OpenAI API Key') || 
+                         (settings.aiProvider === 'openrouter' && 'OpenRouter API Key') || 
+                         'API Key / Token (if required)'}
+                      </label>
+                      <input
+                        type="password"
+                        value={settings.aiApiKey || ''}
+                        onChange={(e) =>
+                          onUpdateSettings({
+                            ...settings,
+                            aiApiKey: e.target.value,
+                          })
+                        }
+                        placeholder={settings.aiProvider === 'openai' ? 'sk-proj-...' : 'sk-or-...'}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                    </div>
+                  )}
+
+                  {/* Model Name (For OpenAI, OpenRouter, Custom) */}
+                  {(settings.aiProvider || 'gemini') !== 'gemini' && (
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
+                        Model Name
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.customModelName || ''}
+                        onChange={(e) =>
+                          onUpdateSettings({
+                            ...settings,
+                            customModelName: e.target.value,
+                          })
+                        }
+                        placeholder={
+                          settings.aiProvider === 'openai' ? 'gpt-4o-mini' : 
+                          settings.aiProvider === 'openrouter' ? 'google/gemini-2.5-flash' : 'llama3'
+                        }
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                    </div>
+                  )}
+
+                  {/* Custom Endpoint URL (For Custom) */}
+                  {settings.aiProvider === 'custom' && (
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
+                        Custom Endpoint URL
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.customBaseUrl || ''}
+                        onChange={(e) =>
+                          onUpdateSettings({
+                            ...settings,
+                            customBaseUrl: e.target.value,
+                          })
+                        }
+                        placeholder="e.g., http://localhost:11434/v1"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Ensure local servers (Ollama, LM Studio) are running and configured with CORS enabled.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* AI Prompt Custom Directives */}

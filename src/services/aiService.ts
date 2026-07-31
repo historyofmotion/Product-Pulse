@@ -11,8 +11,8 @@ export interface SummaryRequestParams {
 }
 
 export interface PolishRequestParams {
-  rawText: string;
   projectName?: string;
+  rawText: string;
 }
 
 export interface PolishResult {
@@ -41,14 +41,101 @@ function getClientApiKey(settings?: AppSettings): string | null {
 }
 
 /**
- * Executes direct in-browser Gemini summary generation
+ * Resolves the API key for alternative providers
  */
-async function generateSummaryInBrowser(
-  params: SummaryRequestParams,
-  apiKey: string
-): Promise<WeeklySummaryData> {
-  const ai = new GoogleGenAI({ apiKey });
+function getAIProviderApiKey(settings?: AppSettings): string {
+  const provider = settings?.aiProvider || 'gemini';
+  if (provider === 'gemini') {
+    return getClientApiKey(settings) || '';
+  }
+  if (settings?.aiApiKey && settings.aiApiKey.trim()) {
+    return settings.aiApiKey.trim();
+  }
+  // Try fallback environment variables
+  if (provider === 'openai') {
+    return (import.meta as any).env?.VITE_OPENAI_API_KEY || '';
+  }
+  if (provider === 'openrouter') {
+    return (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
+  }
+  return '';
+}
 
+/**
+ * Resolves chat completion URL for OpenAI-compatible providers
+ */
+function resolveBaseUrl(provider: string, customUrl?: string): string {
+  if (provider === 'openai') {
+    return 'https://api.openai.com/v1/chat/completions';
+  }
+  if (provider === 'openrouter') {
+    return 'https://openrouter.ai/api/v1/chat/completions';
+  }
+  let url = customUrl || 'http://localhost:11434/v1';
+  if (!url.endsWith('/chat/completions')) {
+    if (url.endsWith('/')) {
+      url += 'chat/completions';
+    } else {
+      url += '/chat/completions';
+    }
+  }
+  return url;
+}
+
+/**
+ * Generic caller for OpenAI-compatible completions
+ */
+async function callOpenAICompatibleAPI(
+  endpoint: string,
+  model: string,
+  apiKey: string,
+  systemInstruction: string,
+  prompt: string
+): Promise<string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  const body: any = {
+    model: model,
+    messages: [
+      { role: 'system', content: systemInstruction },
+      { role: 'user', content: prompt }
+    ]
+  };
+
+  // Enable JSON response format if supported by the provider
+  if (endpoint.includes('openai') || endpoint.includes('openrouter')) {
+    body.response_format = { type: 'json_object' };
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`API returned error ${response.status}: ${errText || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const choice = data.choices?.[0]?.message?.content;
+  if (!choice) {
+    throw new Error('Received empty completions choice from AI engine.');
+  }
+  return choice;
+}
+
+/**
+ * Build system instruction and prompt for Weekly Summary
+ */
+function buildSummaryPrompt(params: SummaryRequestParams) {
   const promptData = {
     weekLabel: params.weekLabel || 'Current Week',
     dateRange: params.dateRange || '',
@@ -71,22 +158,60 @@ CRITICAL FACTUALITY MANDATE:
 - Maintain a professional, active tone based solely on what was actually completed or updated.
 ${params.customInstructions ? `Additional Instructions: ${params.customInstructions}` : ''}`;
 
-  const prompt = `Analyze these raw accomplishments for ${promptData.weekLabel} (${promptData.dateRange}) and produce a structured weekly summary in ${params.tone || 'executive'} tone:
+  const prompt = `Analyze these raw accomplishments for ${promptData.weekLabel} (${promptData.dateRange}) and produce a structured weekly summary in ${params.tone || 'executive'} tone.
+CRITICAL: You must return valid JSON that can be parsed directly.
 
 Data:
 ${JSON.stringify(promptData, null, 2)}
 
-Return a JSON object with:
-1. "executiveSummary": A concise 2-3 sentence high-level overview of overall momentum and key achievements this week.
-2. "keyWins": Array of 3-5 major achievements/highlights of the week (short impactful bullet points).
-3. "projectSummaries": Array of objects, each containing:
-   - "projectId": string
-   - "projectName": string
-   - "statusColor": string (e.g., "green", "amber", or "blue")
-   - "headline": string (one sentence summary of project progress this week)
-   - "bulletPoints": array of clean, polished bullet point accomplishment strings
-4. "slackFormatted": Markdown text formatted specifically for pasting into Slack / Teams (using *bold*, emojis, clean bullet points).
-5. "emailFormatted": Plain text formatted specifically for sending as an executive update email.`;
+Return a JSON object with this exact structure:
+{
+  "executiveSummary": "A concise 2-3 sentence high-level overview of overall momentum and key achievements this week.",
+  "keyWins": ["Major achievement 1", "Major achievement 2"],
+  "projectSummaries": [
+    {
+      "projectId": "id-of-project",
+      "projectName": "Name of Project",
+      "statusColor": "green, amber, or blue",
+      "headline": "One sentence summary of project progress this week",
+      "bulletPoints": ["Clean, polished accomplishment bullet 1", "Clean, polished accomplishment bullet 2"]
+    }
+  ],
+  "slackFormatted": "Markdown text formatted specifically for pasting into Slack / Teams (using *bold*, emojis, clean bullet points).",
+  "emailFormatted": "Plain text formatted specifically for sending as an executive update email."
+}`;
+
+  return { systemInstruction, prompt };
+}
+
+/**
+ * Build prompt for note polishing
+ */
+function buildPolishPrompt(params: PolishRequestParams) {
+  const systemInstruction = `You are an expert executive assistant. Polish user notes into clear accomplishments.`;
+  const prompt = `Refine this quick user note into a concise, professional accomplishment statement for weekly status tracking.
+Project context: ${params.projectName || 'General'}
+Raw note: "${params.rawText.trim()}"
+
+Return JSON with this exact structure:
+{
+  "polishedText": "A polished, active-voice bullet point statement (15-25 words).",
+  "suggestedTag": "One of: Feature, Fix, Milestone, Meeting, Docs, Refactor, Win, Ops",
+  "suggestedImpact": "One of: High, Medium, Standard"
+}`;
+
+  return { systemInstruction, prompt };
+}
+
+/**
+ * Executes direct in-browser Gemini summary generation
+ */
+async function generateSummaryInBrowser(
+  params: SummaryRequestParams,
+  apiKey: string
+): Promise<WeeklySummaryData> {
+  const ai = new GoogleGenAI({ apiKey });
+  const { systemInstruction, prompt } = buildSummaryPrompt(params);
 
   const modelCandidates = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-3.6-flash'];
   let response;
@@ -158,15 +283,7 @@ async function polishNoteInBrowser(
   apiKey: string
 ): Promise<PolishResult> {
   const ai = new GoogleGenAI({ apiKey });
-
-  const prompt = `Refine this quick user note into a concise, professional accomplishment statement for weekly status tracking.
-Project context: ${params.projectName || 'General'}
-Raw note: "${params.rawText.trim()}"
-
-Return JSON with:
-1. "polishedText": A polished, active-voice bullet point statement (15-25 words).
-2. "suggestedTag": One of ["Feature", "Fix", "Milestone", "Meeting", "Docs", "Refactor", "Win", "Ops"].
-3. "suggestedImpact": One of ["High", "Medium", "Standard"].`;
+  const { prompt } = buildPolishPrompt(params);
 
   const modelCandidates = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-3.6-flash'];
   let response;
@@ -205,13 +322,33 @@ Return JSON with:
 }
 
 /**
- * Main AI Weekly Summary Generator with server endpoint call & browser fallback
+ * Main AI Weekly Summary Generator supporting multiple providers and fallbacks
  */
 export async function generateWeeklySummary(
   params: SummaryRequestParams,
   settings?: AppSettings
 ): Promise<WeeklySummaryData> {
-  // 1. First try backend Express endpoint
+  const provider = settings?.aiProvider || 'gemini';
+
+  // 1. Handlers for alternative providers (OpenAI / OpenRouter / Custom local endpoints)
+  if (provider !== 'gemini') {
+    const endpoint = resolveBaseUrl(provider, settings?.customBaseUrl);
+    const key = getAIProviderApiKey(settings);
+    const model = settings?.customModelName || (
+      provider === 'openai' ? 'gpt-4o-mini' : 
+      provider === 'openrouter' ? 'google/gemini-2.5-flash' : 'llama3'
+    );
+
+    const { systemInstruction, prompt } = buildSummaryPrompt(params);
+    const resContent = await callOpenAICompatibleAPI(endpoint, model, key, systemInstruction, prompt);
+    const parsed = JSON.parse(resContent.trim());
+    return {
+      ...parsed,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  // 2. Default Gemini behavior: Try server route first
   try {
     const res = await fetch('/api/summary', {
       method: 'POST',
@@ -232,7 +369,7 @@ export async function generateWeeklySummary(
     console.info('Backend API unavailable. Falling back to client-side Gemini generation.');
   }
 
-  // 2. Fallback to client-side Gemini call
+  // 3. Fallback to client-side Gemini call
   const apiKey = getClientApiKey(settings);
   if (!apiKey) {
     throw new Error(
@@ -244,13 +381,29 @@ export async function generateWeeklySummary(
 }
 
 /**
- * Main AI Note Polishing function with server endpoint call & browser fallback
+ * Main AI Note Polishing supporting multiple providers and fallbacks
  */
 export async function polishNote(
   params: PolishRequestParams,
   settings?: AppSettings
 ): Promise<PolishResult> {
-  // 1. First try backend Express endpoint
+  const provider = settings?.aiProvider || 'gemini';
+
+  // 1. Handlers for alternative providers (OpenAI / OpenRouter / Custom local endpoints)
+  if (provider !== 'gemini') {
+    const endpoint = resolveBaseUrl(provider, settings?.customBaseUrl);
+    const key = getAIProviderApiKey(settings);
+    const model = settings?.customModelName || (
+      provider === 'openai' ? 'gpt-4o-mini' : 
+      provider === 'openrouter' ? 'google/gemini-2.5-flash' : 'llama3'
+    );
+
+    const { systemInstruction, prompt } = buildPolishPrompt(params);
+    const resContent = await callOpenAICompatibleAPI(endpoint, model, key, systemInstruction, prompt);
+    return JSON.parse(resContent.trim());
+  }
+
+  // 2. Default Gemini behavior: Try server route first
   try {
     const res = await fetch('/api/polish-note', {
       method: 'POST',
@@ -268,7 +421,7 @@ export async function polishNote(
     console.info('Backend API unavailable. Falling back to client-side Gemini generation.');
   }
 
-  // 2. Fallback to client-side Gemini call
+  // 3. Fallback to client-side Gemini call
   const apiKey = getClientApiKey(settings);
   if (!apiKey) {
     throw new Error(
